@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Indian Railways DSS Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+        }
+        .scroll-container {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        .scroll-container::-webkit-scrollbar {
+            display: none;
+        }
+        .graph-container {
+            width: 100%;
+            height: 250px;
+        }
+        .axis path, .axis line {
+            fill: none;
+            stroke: #e0e0e0;
+            shape-rendering: crispEdges;
+        }
+        .axis text {
+            fill: #e0e0e0;
+        }
+        #tooltip {
+            position: absolute;
+            background-color: rgba(31, 41, 55, 0.9);
+            color: #f3f4f6;
+            padding: 8px 12px;
+            border-radius: 8px;
+            pointer-events: none;
+            display: none;
+            border: 1px solid #4b5563;
+            font-size: 14px;
+            z-index: 100;
+            min-width: 150px;
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        .blink {
+            animation: blink 1s ease-in-out infinite;
+        }
+        #conflict-popup {
+            position: absolute;
+            background-color: #dc2626;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            font-weight: bold;
+            text-align: center;
+            white-space: nowrap;
+            display: none;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .train-row:hover {
+            background-color: rgba(75, 85, 99, 0.2);
+        }
+    </style>
+</head>
+<body class="bg-gray-900 min-h-screen p-4 md:p-8">
+
+    <!-- Tooltip for Canvas -->
+    <div id="tooltip" class="rounded-lg shadow-lg"></div>
+    <div id="conflict-popup"></div>
+
+    <!-- Main Dashboard Container -->
+    <div class="max-w-7xl mx-auto rounded-xl shadow-2xl overflow-hidden bg-gray-800 border border-gray-700">
+
+        <!-- Header -->
+        <header class="p-6 bg-gray-800 border-b border-gray-700 flex justify-between items-center flex-wrap gap-4">
+            <div class="flex items-center gap-4">
+                <img src="https://upload.wikimedia.org/wikipedia/en/thumb/4/4e/Indian_Railways_Logo.svg/1200px-Indian_Railways_Logo.svg.png" alt="Indian Railways Logo" class="h-12 w-12 object-contain" />
+                <h1 class="text-2xl md:text-3xl font-bold text-teal-400 tracking-wide">Train Traffic Control DSS</h1>
+            </div>
+            <div class="flex flex-col items-end text-sm">
+                <span id="current-time" class="font-mono text-gray-400"></span>
+                <span id="current-date" class="font-mono text-gray-400"></span>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="grid grid-cols-1 md:grid-cols-3 gap-6 p-6">
+
+            <!-- Section 1: Interactive Network View -->
+            <div class="md:col-span-2 bg-gray-900 p-6 rounded-xl shadow-inner border border-gray-700 flex flex-col">
+                <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
+                    <h2 class="text-xl font-semibold text-gray-200">Interactive Network View</h2>
+                    <div class="flex flex-wrap gap-2 text-sm text-gray-400">
+                        <label class="flex items-center gap-1 cursor-pointer">
+                            <input type="checkbox" id="toggle-trains" checked class="form-checkbox h-4 w-4 text-teal-600 bg-gray-700 border-gray-600 rounded"> Trains
+                        </label>
+                        <label class="flex items-center gap-1 cursor-pointer">
+                            <input type="checkbox" id="toggle-signals" checked class="form-checkbox h-4 w-4 text-teal-600 bg-gray-700 border-gray-600 rounded"> Signals
+                        </label>
+                        <label class="flex items-center gap-1 cursor-pointer">
+                            <input type="checkbox" id="toggle-heatmap" checked class="form-checkbox h-4 w-4 text-teal-600 bg-gray-700 border-gray-600 rounded"> Congestion
+                        </label>
+                        <label class="flex items-center gap-1 cursor-pointer">
+                            <input type="checkbox" id="toggle-blocks" checked class="form-checkbox h-4 w-4 text-teal-600 bg-gray-700 border-gray-600 rounded"> Block IDs
+                        </label>
+                    </div>
+                </div>
+                <div id="network-view-container" class="flex-grow flex flex-col justify-center items-center p-4 bg-gray-800 rounded-lg border border-gray-600 relative">
+                    <canvas id="network-canvas" class="w-full h-full"></canvas>
+                    <div id="minimap-container" class="absolute bottom-4 right-4 bg-gray-900 p-2 rounded-lg shadow-xl border border-gray-700 hidden lg:block">
+                        <canvas id="minimap-canvas" width="200" height="150" class="w-full h-full"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 2: Real-time Recommendations & KPIs -->
+            <div class="space-y-6">
+
+                <!-- Real-time Recommendations -->
+                <div class="bg-gray-900 p-6 rounded-xl shadow-inner border border-red-500">
+                    <h2 class="text-xl font-semibold mb-4 text-red-400">Real-time Recommendation</h2>
+                    <div id="recommendation-card" class="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                        <p id="recommendation-text" class="text-gray-300 font-medium mb-3">
+                            Based on live data, we recommend holding train #7890 (Freight Express) at signal SA1 to allow train #1234 (Rajdhani Express) to proceed.
+                        </p>
+                        <div class="flex gap-2">
+                            <button onclick="handleAction('accept')" class="flex-1 py-2 rounded-md bg-green-600 hover:bg-green-700 text-white font-bold transition-colors">Accept</button>
+                            <button onclick="handleAction('override')" class="flex-1 py-2 rounded-md bg-red-600 hover:bg-red-700 text-white font-bold transition-colors">Override</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- KPIs and Performance Dashboard -->
+                <div class="bg-gray-900 p-6 rounded-xl shadow-inner border border-gray-700">
+                    <h2 class="text-xl font-semibold mb-4 text-gray-200">Performance Metrics</h2>
+                    <div class="grid grid-cols-2 gap-4 text-center">
+                        <div class="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                            <p class="text-teal-400 text-2xl font-bold" id="avg-delay">0.5 min</p>
+                            <p class="text-gray-400 text-sm">Avg. Delay</p>
+                        </div>
+                        <div class="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                            <p class="text-teal-400 text-2xl font-bold" id="on-time-rate">98%</p>
+                            <p class="text-gray-400 text-sm">On-Time Rate</p>
+                        </div>
+                        <div class="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                            <p class="text-teal-400 text-2xl font-bold" id="throughput">25/hr</p>
+                            <p class="text-gray-400 text-sm">Throughput</p>
+                        </div>
+                        <div class="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                            <p class="text-teal-400 text-2xl font-bold" id="utilization">85%</p>
+                            <p class="text-gray-400 text-sm">Track Utilization</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section 3: Live Train Data Table -->
+            <div class="md:col-span-3 bg-gray-900 p-6 rounded-xl shadow-inner border border-gray-700 flex flex-col">
+                <h2 class="text-xl font-semibold mb-4 text-gray-200">Live Train Data</h2>
+                <div class="scroll-container overflow-x-auto">
+                    <table id="trains-table" class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-gray-700 text-gray-200">
+                                <th class="p-4 rounded-tl-lg">ID</th>
+                                <th class="p-4">Name</th>
+                                <th class="p-4">Status</th>
+                                <th class="p-4">Position</th>
+                                <th class="p-4">ETA</th>
+                                <th class="p-4 rounded-tr-lg">Priority</th>
+                            </tr>
+                        </thead>
+                        <tbody id="trains-table-body">
+                            <!-- Train data will be dynamically added here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Section 4: Performance Analytics Graphs -->
+            <div class="md:col-span-3 bg-gray-900 p-6 rounded-xl shadow-inner border border-gray-700 flex flex-col">
+                <h2 class="text-xl font-semibold mb-4 text-gray-200">Performance Analytics</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                        <h3 class="text-lg font-semibold text-gray-200 mb-2">On-Time Performance Rate (%)</h3>
+                        <div id="on-time-graph" class="graph-container"></div>
+                    </div>
+                    <div class="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                        <h3 class="text-lg font-semibold text-gray-200 mb-2">Average Delay by Train Type (min)</h3>
+                        <div id="delay-graph" class="graph-container"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 5: Platform Availability Check -->
+            <div class="md:col-span-3 bg-gray-900 p-6 rounded-xl shadow-inner border border-gray-700 flex flex-col">
+                <h2 class="text-xl font-semibold mb-4 text-gray-200">Platform Availability Check</h2>
+                <div class="flex flex-col sm:flex-row items-center gap-4">
+                    <div class="w-full sm:w-1/2 flex flex-col items-start gap-2">
+                        <label for="platform-input" class="text-gray-400 text-sm">Enter Platform Number (e.g., PL-1, PL-2):</label>
+                        <input type="text" id="platform-input" placeholder="e.g., PL-1" class="w-full p-2 rounded-md bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-400">
+                    </div>
+                    <div class="w-full sm:w-1/2 flex flex-col sm:flex-row items-center gap-4 mt-2 sm:mt-0">
+                        <button id="check-platform-btn" class="w-full sm:w-auto py-2 px-6 rounded-md bg-teal-600 hover:bg-teal-700 text-white font-bold transition-colors">Check Availability</button>
+                        <div id="platform-status-result" class="w-full sm:w-auto p-3 text-center rounded-md font-semibold">
+                            <!-- Result will be displayed here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Section 6: Railway Station Information -->
+            <div class="md:col-span-3 bg-gray-900 p-6 rounded-xl shadow-inner border border-gray-700 flex flex-col">
+                <h2 class="text-xl font-semibold mb-4 text-gray-200">Railway Station Information</h2>
+                <div class="flex flex-col sm:flex-row items-center gap-4">
+                    <div class="w-full sm:w-1/2 flex flex-col items-start gap-2">
+                        <label for="station-input" class="text-gray-400 text-sm">Enter Station Code (e.g., NDLS):</label>
+                        <input type="text" id="station-input" placeholder="e.g., NDLS" class="w-full p-2 rounded-md bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-400">
+                    </div>
+                    <div class="w-full sm:w-1/2 flex flex-col sm:flex-row items-center gap-4 mt-2 sm:mt-0">
+                        <button id="check-station-btn" class="w-full sm:w-auto py-2 px-6 rounded-md bg-teal-600 hover:bg-teal-700 text-white font-bold transition-colors">Get Info</button>
+                    </div>
+                </div>
+                <div id="station-info-result" class="mt-4 p-4 rounded-lg bg-gray-800 border border-gray-700 hidden">
+                    <h3 class="text-lg font-semibold text-gray-200" id="station-name-display"></h3>
+                    <p class="text-gray-400 mt-2" id="station-message"></p>
+                </div>
+            </div>
+
+            <!-- Section 7: Ticket Counter -->
+            <div class="md:col-span-3 bg-gray-900 p-6 rounded-xl shadow-inner border border-gray-700 flex flex-col">
+                <h2 class="text-xl font-semibold mb-4 text-gray-200">Ticket Counter</h2>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
+                    <div class="flex flex-col gap-2">
+                        <label for="train-number" class="text-gray-400 text-sm">Train Number:</label>
+                        <input type="text" id="train-number" placeholder="e.g., 1234" class="p-2 rounded-md bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-400">
+                    </div>
+                    <div class="flex flex-col gap-2">
+                        <label for="ticket-count" class="text-gray-400 text-sm">Number of Tickets:</label>
+                        <input type="number" id="ticket-count" placeholder="e.g., 2" class="p-2 rounded-md bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-400">
+                    </div>
+                    <div class="flex flex-col gap-2">
+                        <label for="ticket-class" class="text-gray-400 text-sm">Class:</label>
+                        <select id="ticket-class" class="p-2 rounded-md bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-teal-400">
+                            <option value="1A">1st AC</option>
+                            <option value="2A">2nd AC</option>
+                            <option value="3A">3rd AC</option>
+                            <option value="SL">Sleeper</option>
+                            <option value="2S">2nd Seating</option>
+                        </select>
+                    </div>
+                    <div class="flex items-center pt-6 md:pt-2">
+                        <button id="book-ticket-btn" class="w-full py-2 px-6 rounded-md bg-teal-600 hover:bg-teal-700 text-white font-bold transition-colors">Book Ticket</button>
+                    </div>
+                </div>
+                <div id="booking-status-result" class="mt-4 p-4 rounded-lg text-center font-semibold hidden">
+                    <!-- Booking status will be displayed here -->
+                </div>
+            </div>
+
+            <!-- Section 8: Simulation & Controls -->
+            <div class="md:col-span-3 bg-gray-900 p-6 rounded-xl shadow-inner border border-gray-700 flex flex-col md:flex-row justify-between items-center flex-wrap gap-4">
+                <h2 class="text-xl font-semibold text-gray-200">Simulation & Analysis Tools</h2>
+                <div class="flex-grow flex justify-center md:justify-end gap-4 flex-wrap">
+                    <button class="py-2 px-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-bold transition-colors">Run What-if Scenario</button>
+                    <button class="py-2 px-6 rounded-md bg-gray-600 hover:bg-gray-700 text-white font-bold transition-colors">Load Saved Plan</button>
+                    <button class="py-2 px-6 rounded-md bg-gray-600 hover:bg-gray-700 text-white font-bold transition-colors">Generate New Plan</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Mock data for trains and analytics
+        const trains = [
+            { id: '1234', name: 'Rajdhani Express', status: 'On-Time', eta: '10:45', priority: 'High', type: 'Express', currentPath: ['S1-S2-A', 'S2-S2-B'], progress: 0.1, conflict: false, conflictWith: null },
+            { id: '5678', name: 'Local Passenger', status: 'Delayed', eta: '10:55', priority: 'Medium', type: 'Local', currentPath: ['S2-S3-A', 'S3-S3-B'], progress: 0.3, conflict: false, conflictWith: null },
+            { id: '7890', name: 'Freight Express', status: 'On-Time', eta: '11:10', priority: 'Low', type: 'Freight', currentPath: ['S2-J1-A', 'J1-S4-A'], progress: 0.5, conflict: false, conflictWith: null },
+            { id: '9101', name: 'Shatabdi Express', status: 'On-Time', eta: '11:20', priority: 'High', type: 'Express', currentPath: ['J1-S4-A'], progress: 0.8, conflict: false, conflictWith: null },
+        ];
+        
+        const analyticsData = {
+            onTime: [
+                { time: '10:00', value: 95 },
+                { time: '10:15', value: 96 },
+                { time: '10:30', value: 98 },
+                { time: '10:45', value: 98.5 },
+                { time: '11:00', value: 97 },
+                { time: '11:15', value: 97.5 },
+            ],
+            avgDelay: [
+                { type: 'Express', delay: 2.1 },
+                { type: 'Freight', delay: 1.5 },
+                { type: 'Local', delay: 3.0 }
+            ]
+        };
+
+        const platformData = {
+            'PL-1': 'Occupied',
+            'PL-2': 'Available',
+            'PL-3': 'Under Maintenance',
+            'PL-4': 'Available',
+            'PL-5': 'Occupied'
+        };
+
+        const stationData = {
+            'NDLS': { name: 'New Delhi Railway Station', message: 'All systems are operating normally. Three trains are scheduled for departure in the next hour.' },
+            'BCT': { name: 'Mumbai Central', message: 'Minor delays due to signal maintenance. Expected to clear within 20 minutes.' },
+            'HWH': { name: 'Howrah Junction', message: 'High traffic volume expected. Priority control is in effect for express trains.' },
+            'JSR': { name: 'Jay Shri Ram', message: 'A new station has been added to the network. Services are expected to begin shortly.' }
+        };
+
+        // UI Layer state
+        let layers = {
+            showTrains: true,
+            showSignals: true,
+            showHeatmap: true,
+            showBlockIDs: true
+        };
+
+        // Network Map Canvas and related variables
+        const canvas = document.getElementById('network-canvas');
+        const ctx = canvas.getContext('2d');
+        const minimapCanvas = document.getElementById('minimap-canvas');
+        const minimapCtx = minimapCanvas.getContext('2d');
+        const tooltip = document.getElementById('tooltip');
+        const conflictPopup = document.getElementById('conflict-popup');
+
+        let frameCounter = 0;
+        let animationFrameId;
+
+        // Pan & Zoom variables
+        let panX = 0;
+        let panY = 0;
+        let zoom = 1;
+        let isPanning = false;
+        let lastPanX = 0;
+        let lastPanY = 0;
+
+        // Define the schematic network layout
+        const stations = {
+            'S1': { x: 50, y: 100, label: 'NDLS' },
+            'S2': { x: 250, y: 100, label: 'BCT' },
+            'S3': { x: 450, y: 100, label: 'HWH' },
+            'J1': { x: 250, y: 250, label: 'Junction A' },
+            'S4': { x: 450, y: 250, label: 'JSR' }
+        };
+        
+        // Define track blocks with coordinates and ID
+        const trackBlocks = [
+            // Horizontal tracks
+            { id: 'S1-S2-A', start: { x: stations.S1.x, y: stations.S1.y }, end: { x: stations.S2.x - 50, y: stations.S2.y }, occupiedBy: [], timeOccupied: 0 },
+            { id: 'S2-S2-B', start: { x: stations.S2.x - 50, y: stations.S2.y }, end: { x: stations.S2.x, y: stations.S2.y }, occupiedBy: [], timeOccupied: 0 }, // Station block
+            { id: 'S2-S3-A', start: { x: stations.S2.x, y: stations.S2.y }, end: { x: stations.S3.x - 50, y: stations.S3.y }, occupiedBy: [], timeOccupied: 0 },
+            { id: 'S3-S3-B', start: { x: stations.S3.x - 50, y: stations.S3.y }, end: { x: stations.S3.x, y: stations.S3.y }, occupiedBy: [], timeOccupied: 0 }, // Station block
+            // Vertical tracks
+            { id: 'S2-J1-A', start: { x: stations.S2.x, y: stations.S2.y }, end: { x: stations.S2.x, y: stations.J1.y - 20 }, occupiedBy: [], timeOccupied: 0 },
+            { id: 'J1-J1-B', start: { x: stations.S2.x, y: stations.J1.y - 20 }, end: { x: stations.J1.x, y: stations.J1.y + 20 }, occupiedBy: [], timeOccupied: 0 },
+            { id: 'J1-S4-A', start: { x: stations.J1.x, y: stations.J1.y }, end: { x: stations.S4.x, y: stations.S4.y }, occupiedBy: [], timeOccupied: 0 }
+        ];
+
+        const signals = [
+            { id: 'Sig-S2', x: stations.S2.x - 20, y: stations.S2.y + 15, status: 'Green', controlledBlock: 'S2-S3-A' },
+            { id: 'Sig-S3', x: stations.S3.x - 20, y: stations.S3.y + 15, status: 'Green', controlledBlock: null },
+            { id: 'Sig-J1', x: stations.J1.x + 20, y: stations.J1.y, status: 'Green', controlledBlock: 'S2-J1-A' },
+            { id: 'Sig-S4', x: stations.S4.x - 20, y: stations.S4.y + 15, status: 'Green', controlledBlock: 'J1-S4-A' }
+        ];
+
+        let hoverBlock = null;
+
+        // Function to update the canvas dimensions
+        function resizeCanvas() {
+            const canvasContainer = document.getElementById('network-view-container');
+            canvas.width = canvasContainer.clientWidth;
+            canvas.height = canvasContainer.clientHeight;
+        }
+
+        // Function to simulate backend data updates
+        function simulateLiveData() {
+            frameCounter++;
+            
+            // Randomly create a conflict every 20 seconds
+            if (frameCounter % 1200 === 0) {
+                const train1 = trains[Math.floor(Math.random() * trains.length)];
+                const train2 = trains.find(t => t.id !== train1.id);
+                if (train2) {
+                    train1.conflict = true;
+                    train1.conflictWith = train2.id;
+                    train2.conflict = true;
+                    train2.conflictWith = train1.id;
+                    document.getElementById('recommendation-text').innerText = `CRITICAL: Conflict detected between Train #${train1.id} and Train #${train2.id} on shared track segment. Recommend holding one train at the nearest signal.`;
+                    document.getElementById('recommendation-card').classList.add('border-red-500');
+                    document.getElementById('recommendation-card').classList.remove('border-gray-700');
+                    console.log(`Conflict detected between Train ${train1.id} and ${train2.id}`);
+                }
+            }
+            if (frameCounter % 1200 === 600) {
+                trains.forEach(t => { t.conflict = false; t.conflictWith = null; });
+                document.getElementById('recommendation-text').innerText = 'All systems are currently running smoothly with no detected conflicts. Monitor for new recommendations.';
+                document.getElementById('recommendation-card').classList.remove('border-red-500');
+                document.getElementById('recommendation-card').classList.add('border-gray-700');
+            }
+
+            // Reset track block statuses
+            trackBlocks.forEach(block => {
+                block.occupiedBy = [];
+                block.timeOccupied = 0;
+            });
+
+            // Update train positions and check block occupancy
+            trains.forEach(train => {
+                const currentBlock = trackBlocks.find(block => block.id === train.currentPath[0]);
+                if (currentBlock) {
+                    if (train.progress < 1) {
+                        train.progress += 0.005; // Smooth movement
+                    } else {
+                        train.progress = 0;
+                        train.currentPath.shift(); // Move to the next block in the path
+                        if (train.currentPath.length === 0) {
+                             const startStation = Object.values(stations).find(s => s.label === getTrainPosition(train).label) || stations['S1'];
+                             const endStation = Object.values(stations)[Math.floor(Math.random() * Object.values(stations).length)];
+                             train.currentPath = findPath(startStation, endStation);
+                        }
+                    }
+                    currentBlock.occupiedBy.push(train.id);
+                    currentBlock.timeOccupied += 1;
+                }
+            });
+
+            // Update signal status based on track block occupancy
+            signals.forEach(signal => {
+                const controlledBlock = trackBlocks.find(block => block.id === signal.controlledBlock);
+                if (controlledBlock) {
+                    if (controlledBlock.occupiedBy.length > 0) {
+                        signal.status = 'Red';
+                    } else {
+                        const approaching = trains.some(t => {
+                           const pathIndex = t.currentPath.indexOf(controlledBlock.id);
+                           return pathIndex === 1;
+                        });
+                        signal.status = approaching ? 'Yellow' : 'Green';
+                    }
+                }
+            });
+
+            // Re-render
+            renderTrainsTable();
+            drawNetwork();
+        }
+
+        function getTrainPosition(train) {
+            const block = trackBlocks.find(b => b.id === train.currentPath[0]);
+            if (!block) {
+                // Return a station position if the train is at the end of its path
+                const endBlockId = train.currentPath[train.currentPath.length - 1];
+                const endBlock = trackBlocks.find(b => b.id === endBlockId);
+                return endBlock ? endBlock.end : { x: 0, y: 0 };
+            }
+            const dx = block.end.x - block.start.x;
+            const dy = block.end.y - block.start.y;
+            return {
+                x: block.start.x + dx * train.progress,
+                y: block.start.y + dy * train.progress
+            };
+        }
+
+        function findPath(startStation, endStation) {
+            // A very simple pathfinding logic for the schematic map
+            const paths = {
+                'NDLS': { 'BCT': ['S1-S2-A', 'S2-S2-B'], 'HWH': ['S1-S2-A', 'S2-S2-B', 'S2-S3-A', 'S3-S3-B'], 'JSR': ['S1-S2-A', 'S2-S2-B', 'S2-J1-A', 'J1-S4-A'] },
+                'BCT': { 'NDLS': ['S2-S2-B', 'S1-S2-A'], 'HWH': ['S2-S3-A', 'S3-S3-B'], 'JSR': ['S2-J1-A', 'J1-S4-A'] },
+                'HWH': { 'NDLS': ['S3-S3-B', 'S2-S3-A', 'S2-S2-B', 'S1-S2-A'], 'BCT': ['S3-S3-B', 'S2-S3-A'], 'JSR': ['S3-S3-B', 'S2-S3-A', 'S2-J1-A', 'J1-S4-A'] },
+                'JSR': { 'NDLS': ['J1-S4-A', 'S2-J1-A', 'S2-S2-B', 'S1-S2-A'], 'BCT': ['J1-S4-A', 'S2-J1-A'], 'HWH': ['J1-S4-A', 'S2-J1-A', 'S2-S3-A', 'S3-S3-B'] }
+            };
+            const startId = startStation.label;
+            const endId = endStation.label;
+            return paths[startId] ? paths[startId][endId] || [] : [];
+        }
+
+        function drawNetwork() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            ctx.translate(panX, panY);
+            ctx.scale(zoom, zoom);
+
+            // Draw congestion heatmap first (as a background layer)
+            if (layers.showHeatmap) {
+                trackBlocks.forEach(block => {
+                    let color;
+                    if (block.occupiedBy.length === 0) {
+                        color = 'rgba(16, 185, 129, 0.4)'; // Green: Free
+                    } else if (block.occupiedBy.length === 1) {
+                        color = 'rgba(245, 158, 11, 0.4)'; // Yellow: Moderate
+                    } else {
+                        color = 'rgba(239, 68, 68, 0.4)'; // Red: Heavy
+                    }
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 20;
+                    ctx.beginPath();
+                    ctx.moveTo(block.start.x, block.start.y);
+                    ctx.lineTo(block.end.x, block.end.y);
+                    ctx.stroke();
+                });
+            }
+
+            // Draw tracks
+            trackBlocks.forEach(block => {
+                let color = '#555'; // Default gray
+                if (block.occupiedBy.length > 0) {
+                    color = (frameCounter % 60 < 30) ? '#ef4444' : '#b91c1c'; // Blinking red
+                } else {
+                    color = '#4b5563'; // Darker gray for empty track
+                }
+                
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                ctx.moveTo(block.start.x, block.start.y);
+                ctx.lineTo(block.end.x, block.end.y);
+                ctx.stroke();
+
+                if (layers.showBlockIDs) {
+                    ctx.fillStyle = '#9ca3af';
+                    ctx.font = '10px Inter';
+                    const midX = (block.start.x + block.end.x) / 2;
+                    const midY = (block.start.y + block.end.y) / 2;
+                    ctx.textAlign = 'center';
+                    ctx.fillText(block.id, midX, midY + 15);
+                }
+            });
+
+            // Draw stations (rectangles)
+            Object.values(stations).forEach(station => {
+                ctx.fillStyle = '#10b981';
+                ctx.beginPath();
+                ctx.roundRect(station.x - 15, station.y - 10, 30, 20, 5);
+                ctx.fill();
+                ctx.fillStyle = '#e0e0e0';
+                ctx.font = '14px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText(station.label, station.x, station.y + 25);
+            });
+
+            // Draw signals
+            if (layers.showSignals) {
+                signals.forEach(signal => {
+                    let statusColor;
+                    if (signal.status === 'Red') statusColor = '#ef4444';
+                    else if (signal.status === 'Yellow') statusColor = '#eab308';
+                    else statusColor = '#10b981';
+
+                    // Draw a simple traffic light pole
+                    ctx.strokeStyle = '#9ca3af';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(signal.x, signal.y);
+                    ctx.lineTo(signal.x, signal.y - 15);
+                    ctx.stroke();
+                    
+                    // Draw the signal light
+                    ctx.fillStyle = statusColor;
+                    ctx.beginPath();
+                    ctx.arc(signal.x, signal.y - 20, 5, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    ctx.fillStyle = '#e0e0e0';
+                    ctx.font = '12px Inter';
+                    ctx.fillText(signal.id, signal.x, signal.y - 30);
+                });
+            }
+
+            // Draw trains
+            if (layers.showTrains) {
+                trains.forEach(train => {
+                    const pos = getTrainPosition(train);
+                    let trainColor;
+                    if (train.type === 'Express') trainColor = '#3b82f6';
+                    else if (train.type === 'Freight') trainColor = '#d97706';
+                    else trainColor = '#14b8a6';
+
+                    // Draw train as a circle
+                    ctx.fillStyle = trainColor;
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Draw train ID
+                    ctx.fillStyle = '#e0e0e0';
+                    ctx.font = '12px Inter';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`#${train.id}`, pos.x, pos.y + 20);
+
+                    // If a train is in conflict, draw a blinking outline
+                    if (train.conflict) {
+                        ctx.strokeStyle = (frameCounter % 30 < 15) ? '#ef4444' : '#f87171'; // Blink red
+                        ctx.lineWidth = 3;
+                        ctx.beginPath();
+                        ctx.arc(pos.x, pos.y, 10, 0, Math.PI * 2);
+                        ctx.stroke();
+                    }
+                });
+            }
+
+            ctx.restore();
+
+            // Draw minimap
+            drawMinimap();
+        }
+
+        function drawMinimap() {
+            minimapCtx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+            minimapCtx.fillStyle = 'rgba(31, 41, 55, 0.5)';
+            minimapCtx.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+
+            const scaleX = minimapCanvas.width / canvas.width;
+            const scaleY = minimapCanvas.height / canvas.height;
+            const miniMapScale = Math.min(scaleX, scaleY);
+
+            // Draw tracks
+            trackBlocks.forEach(block => {
+                minimapCtx.strokeStyle = '#4b5563';
+                minimapCtx.lineWidth = 1;
+                minimapCtx.beginPath();
+                minimapCtx.moveTo(block.start.x * miniMapScale, block.start.y * miniMapScale);
+                minimapCtx.lineTo(block.end.x * miniMapScale, block.end.y * miniMapScale);
+                minimapCtx.stroke();
+            });
+
+            // Draw trains
+            trains.forEach(train => {
+                const pos = getTrainPosition(train);
+                let trainColor;
+                if (train.type === 'Express') trainColor = '#3b82f6';
+                else if (train.type === 'Freight') trainColor = '#d97706';
+                else trainColor = '#14b8a6';
+
+                minimapCtx.fillStyle = trainColor;
+                minimapCtx.beginPath();
+                minimapCtx.arc(pos.x * miniMapScale, pos.y * miniMapScale, 2, 0, Math.PI * 2);
+                minimapCtx.fill();
+            });
+
+            // Draw the visible viewport on the minimap
+            minimapCtx.strokeStyle = '#e0e0e0';
+            minimapCtx.lineWidth = 2;
+            minimapCtx.strokeRect(
+                -panX * miniMapScale,
+                -panY * miniMapScale,
+                canvas.width * miniMapScale / zoom,
+                canvas.height * miniMapScale / zoom
+            );
+        }
+
+        // Live Train Data Table functions
+        function renderTrainsTable() {
+            const tbody = document.getElementById('trains-table-body');
+            tbody.innerHTML = ''; // Clear existing rows
+            trains.forEach(train => {
+                const row = document.createElement('tr');
+                let rowClasses = 'train-row';
+                if (train.conflict) {
+                    rowClasses += ' bg-red-800 text-red-300';
+                } else if (train.status === 'Delayed') {
+                    rowClasses += ' bg-yellow-800 text-yellow-300';
+                } else {
+                    rowClasses += ' text-gray-300';
+                }
+                row.className = `border-t border-gray-700 transition-colors duration-200 ${rowClasses}`;
+                
+                const statusColor = train.status === 'On-Time' ? 'bg-green-500' : 'bg-red-500';
+                const statusText = train.status === 'On-Time' ? 'On-Time' : 'Delayed';
+                const position = getTrainPosition(train);
+                const block = trackBlocks.find(b => b.id === train.currentPath[0]);
+                const positionText = block ? `Block ${block.id}` : 'Arrived';
+
+                row.innerHTML = `
+                    <td class="p-4">${train.id}</td>
+                    <td class="p-4">${train.name}</td>
+                    <td class="p-4">
+                        <span class="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${statusColor} text-white">
+                            <span class="h-1.5 w-1.5 rounded-full ${train.conflict ? 'bg-red-900 blink' : ''}"></span>
+                            ${statusText}
+                        </span>
+                    </td>
+                    <td class="p-4">${positionText}</td>
+                    <td class="p-4">${train.eta}</td>
+                    <td class="p-4">${train.priority}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        // D3.js Graphing functions
+        function drawOnTimeGraph() {
+            const margin = { top: 20, right: 30, bottom: 40, left: 50 };
+            const container = d3.select("#on-time-graph");
+            const svgWidth = container.node().clientWidth;
+            const svgHeight = container.node().clientHeight;
+            const width = svgWidth - margin.left - margin.right;
+            const height = svgHeight - margin.top - margin.bottom;
+
+            container.selectAll("svg").remove();
+
+            const svg = container.append("svg")
+                .attr("width", svgWidth)
+                .attr("height", svgHeight)
+                .append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            const x = d3.scaleBand()
+                .domain(analyticsData.onTime.map(d => d.time))
+                .range([0, width])
+                .padding(0.1);
+
+            const y = d3.scaleLinear()
+                .domain([90, 100])
+                .range([height, 0]);
+
+            const line = d3.line()
+                .x(d => x(d.time) + x.bandwidth() / 2)
+                .y(d => y(d.value))
+                .curve(d3.curveMonotoneX);
+
+            svg.append("path")
+                .datum(analyticsData.onTime)
+                .attr("fill", "none")
+                .attr("stroke", "#4ade80")
+                .attr("stroke-width", 2)
+                .attr("d", line);
+
+            svg.selectAll(".dot")
+                .data(analyticsData.onTime)
+                .enter().append("circle")
+                .attr("class", "dot")
+                .attr("cx", d => x(d.time) + x.bandwidth() / 2)
+                .attr("cy", d => y(d.value))
+                .attr("r", 4)
+                .attr("fill", "#4ade80");
+
+            svg.append("g")
+                .attr("transform", `translate(0,${height})`)
+                .call(d3.axisBottom(x).tickSize(0).tickPadding(10));
+                
+            svg.append("g")
+                .call(d3.axisLeft(y).tickSize(-width).tickPadding(10));
+
+            svg.selectAll(".tick line").attr("stroke", "#4b5563");
+        }
+
+        function drawDelayGraph() {
+            const margin = { top: 20, right: 30, bottom: 40, left: 50 };
+            const container = d3.select("#delay-graph");
+            const svgWidth = container.node().clientWidth;
+            const svgHeight = container.node().clientHeight;
+            const width = svgWidth - margin.left - margin.right;
+            const height = svgHeight - margin.top - margin.bottom;
+
+            container.selectAll("svg").remove();
+
+            const svg = container.append("svg")
+                .attr("width", svgWidth)
+                .attr("height", svgHeight)
+                .append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            const x = d3.scaleBand()
+                .domain(analyticsData.avgDelay.map(d => d.type))
+                .range([0, width])
+                .padding(0.3);
+
+            const y = d3.scaleLinear()
+                .domain([0, d3.max(analyticsData.avgDelay, d => d.delay)])
+                .nice()
+                .range([height, 0]);
+
+            svg.selectAll(".bar")
+                .data(analyticsData.avgDelay)
+                .enter().append("rect")
+                .attr("class", "bar")
+                .attr("x", d => x(d.type))
+                .attr("y", d => y(d.delay))
+                .attr("width", x.bandwidth())
+                .attr("height", d => height - y(d.delay))
+                .attr("fill", "#facc15")
+                .attr("rx", 5)
+                .attr("ry", 5);
+            
+            svg.selectAll(".bar-label")
+                .data(analyticsData.avgDelay)
+                .enter().append("text")
+                .attr("class", "bar-label")
+                .attr("x", d => x(d.type) + x.bandwidth() / 2)
+                .attr("y", d => y(d.delay) - 5)
+                .attr("text-anchor", "middle")
+                .attr("fill", "#e0e0e0")
+                .attr("font-size", "12px")
+                .text(d => d.delay.toFixed(1));
+
+            svg.append("g")
+                .attr("transform", `translate(0,${height})`)
+                .call(d3.axisBottom(x).tickSize(0).tickPadding(10));
+
+            svg.append("g")
+                .call(d3.axisLeft(y).tickSize(-width).tickPadding(10));
+
+            svg.selectAll(".tick text").attr("fill", "#e0e0e0");
+            svg.selectAll(".tick line").attr("stroke", "#4b5563");
+        }
+        
+        // UI Interaction Functions
+        function updateDateTime() {
+            const now = new Date();
+            document.getElementById('current-time').innerText = now.toLocaleTimeString();
+            document.getElementById('current-date').innerText = now.toLocaleDateString();
+        }
+
+        function handleAction(action) {
+            console.log(`Action: ${action} for current recommendation.`);
+            // Simulate clearing the conflict
+            trains.forEach(t => { t.conflict = false; t.conflictWith = null; });
+            document.getElementById('recommendation-text').innerText = `Recommendation accepted. Conflict has been resolved. All systems are running smoothly.`;
+            document.getElementById('recommendation-card').classList.remove('border-red-500');
+            document.getElementById('recommendation-card').classList.add('border-green-500');
+            
+            // Revert back after a few seconds
+            setTimeout(() => {
+                 document.getElementById('recommendation-text').innerText = 'All systems are currently running smoothly with no detected conflicts. Monitor for new recommendations.';
+                 document.getElementById('recommendation-card').classList.remove('border-green-500');
+                 document.getElementById('recommendation-card').classList.add('border-gray-700');
+            }, 5000);
+        }
+
+        document.getElementById('check-platform-btn').addEventListener('click', () => {
+            const platformInput = document.getElementById('platform-input').value.toUpperCase().trim();
+            const resultDiv = document.getElementById('platform-status-result');
+            resultDiv.classList.remove('hidden', 'bg-red-600', 'bg-yellow-600', 'bg-green-600');
+            
+            const status = platformData[platformInput];
+            if (status) {
+                resultDiv.innerText = `${platformInput}: ${status}`;
+                if (status === 'Available') {
+                    resultDiv.classList.add('bg-green-600');
+                } else if (status === 'Occupied') {
+                    resultDiv.classList.add('bg-yellow-600');
+                } else {
+                    resultDiv.classList.add('bg-red-600');
+                }
+            } else {
+                resultDiv.innerText = 'Platform not found';
+                resultDiv.classList.add('bg-gray-600');
+            }
+        });
+
+        document.getElementById('check-station-btn').addEventListener('click', () => {
+            const stationCode = document.getElementById('station-input').value.toUpperCase().trim();
+            const infoDiv = document.getElementById('station-info-result');
+            const nameEl = document.getElementById('station-name-display');
+            const messageEl = document.getElementById('station-message');
+            
+            const stationInfo = stationData[stationCode];
+            if (stationInfo) {
+                nameEl.innerText = stationInfo.name;
+                messageEl.innerText = stationInfo.message;
+                infoDiv.classList.remove('hidden');
+            } else {
+                nameEl.innerText = 'Station Not Found';
+                messageEl.innerText = 'Please enter a valid station code.';
+                infoDiv.classList.remove('hidden');
+            }
+        });
+        
+        document.getElementById('book-ticket-btn').addEventListener('click', () => {
+            const trainNumber = document.getElementById('train-number').value.trim();
+            const ticketCount = parseInt(document.getElementById('ticket-count').value, 10);
+            const ticketClass = document.getElementById('ticket-class').value;
+            const statusDiv = document.getElementById('booking-status-result');
+            statusDiv.classList.remove('hidden', 'bg-red-600', 'bg-green-600');
+
+            if (!trainNumber || isNaN(ticketCount) || ticketCount <= 0) {
+                statusDiv.innerText = 'Invalid input. Please check the fields.';
+                statusDiv.classList.add('bg-red-600');
+                return;
+            }
+
+            // Simple mock logic
+            const isAvailable = Math.random() > 0.3;
+            if (isAvailable) {
+                statusDiv.innerText = `Booking successful! ${ticketCount} ticket(s) for Train ${trainNumber} (${ticketClass}) have been confirmed.`;
+                statusDiv.classList.add('bg-green-600');
+            } else {
+                statusDiv.innerText = `Booking failed. Tickets are not available for Train ${trainNumber} in ${ticketClass} class.`;
+                statusDiv.classList.add('bg-red-600');
+            }
+        });
+
+        // Toggle layers for the canvas
+        document.getElementById('toggle-trains').addEventListener('change', (e) => {
+            layers.showTrains = e.target.checked;
+        });
+        document.getElementById('toggle-signals').addEventListener('change', (e) => {
+            layers.showSignals = e.target.checked;
+        });
+        document.getElementById('toggle-heatmap').addEventListener('change', (e) => {
+            layers.showHeatmap = e.target.checked;
+        });
+        document.getElementById('toggle-blocks').addEventListener('change', (e) => {
+            layers.showBlockIDs = e.target.checked;
+        });
+
+        // Canvas mouse event listeners for panning and zooming
+        canvas.addEventListener('mousedown', (e) => {
+            isPanning = true;
+            lastPanX = e.clientX;
+            lastPanY = e.clientY;
+        });
+        canvas.addEventListener('mouseup', () => {
+            isPanning = false;
+        });
+        canvas.addEventListener('mouseout', () => {
+            isPanning = false;
+        });
+        canvas.addEventListener('mousemove', (e) => {
+            if (isPanning) {
+                const dx = e.clientX - lastPanX;
+                const dy = e.clientY - lastPanY;
+                panX += dx;
+                panY += dy;
+                lastPanX = e.clientX;
+                lastPanY = e.clientY;
+            }
+        });
+
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1;
+            const mouseX = e.clientX - canvas.getBoundingClientRect().left;
+            const mouseY = e.clientY - canvas.getBoundingClientRect().top;
+            
+            // Calculate new pan to keep mouse position fixed
+            panX = mouseX - (mouseX - panX) * scaleFactor;
+            panY = mouseY - (mouseY - panY) * scaleFactor;
+
+            zoom *= scaleFactor;
+            zoom = Math.max(0.2, Math.min(3, zoom)); // Limit zoom level
+        });
+        
+        // Main animation loop
+        function animate() {
+            simulateLiveData();
+            animationFrameId = requestAnimationFrame(animate);
+        }
+
+        // Initial setup and start
+        window.onload = function () {
+            resizeCanvas();
+            updateDateTime();
+            drawOnTimeGraph();
+            drawDelayGraph();
+            setInterval(updateDateTime, 1000);
+            animate();
+            window.addEventListener('resize', () => {
+                resizeCanvas();
+                drawOnTimeGraph();
+                drawDelayGraph();
+            });
+        };
+    </script>
+</body>
+</html>
